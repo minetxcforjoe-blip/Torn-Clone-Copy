@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Torn Underground - Core Terminal</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #111; color: #ccc; display: flex; flex-direction: column; min-height: 100vh; }
+        header { background: #050505; padding: 15px; border-bottom: 2px solid #ff9900; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { color: #ff9900; font-size: 20px; text-transform: uppercase; letter-spacing: 1px; }
+        .main-container { display: flex; max-width: 1600px; width: 100%; margin: 0 auto; padding: 20px; gap: 20px; flex: 1; }
+        .side-col { width: 330px; display: flex; flex-direction: column; gap: 15px; }
+        .center-col { flex: 1; display: flex; flex-direction: column; gap: 20px; }
+        .card { background: #1a1a1a; border: 1px solid #282828; border-radius: 4px; padding: 15px; }
+        .card h3 { font-size: 11px; color: #888; text-transform: uppercase; border-bottom: 1px solid #282828; padding-bottom: 5px; margin-bottom: 12px; letter-spacing: 1px; }
+        .avatar-box { width: 70px; height: 70px; background: #222; border: 2px solid #ff9900; border-radius: 4px; display: flex; justify-content: center; align-items: center; font-size: 26px; }
+        .bar-wrapper { margin-bottom: 8px; }
+        .bar-lbl { display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 2px; }
+        .bar-outline { background: #222; height: 10px; border-radius: 2px; overflow: hidden; border: 1px solid #333; }
+        .bar-fill { height: 100%; width: 0%; transition: width 0.3s; }
+        .e-fill { background: #cc0000; } .n-fill { background: #9b59b6; } .h-fill { background: #e67e22; } .l-fill { background: #27ae60; }
+        .stat-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px dashed #252525; }
+        .hosp-banner { background: #962d22; color: #fff; padding: 12px; text-align: center; border-radius: 4px; font-weight: bold; font-size: 12px; display: none; text-transform: uppercase; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        button { background: #252525; border: 1px solid #3a3a3a; color: #fff; padding: 8px; font-size: 11px; font-weight: bold; border-radius: 2px; cursor: pointer; text-transform: uppercase; }
+        button:hover { background: #ff9900; color: #000; border-color: #ff9900; }
+        .list-entry { background: #151515; border: 1px solid #222; padding: 8px; margin-bottom: 6px; border-radius: 2px; display: flex; justify-content: space-between; align-items: center; }
+        .terminal-feed { background: #070707; border: 1px solid #222; padding: 10px; font-family: monospace; font-size: 11px; color: #00ff00; max-height: 120px; overflow-y: auto; display: none; }
+        .chat-area { display: flex; flex-direction: column; height: 200px; background: #0a0a0a; border: 1px solid #222; border-radius: 3px; }
+        .chat-window { flex: 1; padding: 8px; overflow-y: auto; font-size: 11px; font-family: monospace; color: #00dd00; }
+        .chat-input-row { display: flex; border-top: 1px solid #222; }
+        .chat-input-row input { flex: 1; background: transparent; border: none; padding: 8px; color: #fff; font-size: 12px; }
+        .chat-input-row input:focus { outline: none; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Torn Underground Terminal</h1>
+        <div><strong style="color:#27ae60">Liquid Cash Flow:</strong> <span id="hdr-cash" style="color:#fff">$0</span></div>
+    </header>
+
+    <div class="main-container">
+        <div class="side-col">
+            <div class="card">
+                <h3>Visual Identification</h3>
+                <div style="display:flex; gap:12px; align-items:center;">
+                    <div id="p-avatar" class="avatar-box">👤</div>
+                    <div>
+                        <h2 id="p-username" style="font-size:15px; color:#fff;">...</h2>
+                        <select id="sel-avatar" onchange="patchAvatar()" style="background:#0a0a0a; color:#fff; border:1px solid #333; font-size:11px; padding:2px; margin-top:4px;">
+                            <option value="Thief">Thief</option>
+                            <option value="Mercenary">Mercenary</option>
+                            <option value="Hacker">Hacker</option>
+                            <option value="Enforcer">Enforcer</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="margin-top:12px;">
+                    <div class="bar-wrapper"><div class="bar-lbl"><span>Energy</span><span id="lbl-energy">0/0</span></div><div class="bar-outline"><div id="f-energy" class="bar-fill e-fill"></div></div></div>
+                    <div class="bar-wrapper"><div class="bar-lbl"><span>Nerve Matrix</span><span id="lbl-nerve">0/0</span></div><div class="bar-outline"><div id="f-nerve" class="bar-fill n-fill"></div></div></div>
+                    <div class="bar-wrapper"><div class="bar-lbl"><span>Morale (Happy)</span><span id="lbl-happy">0/0</span></div><div class="bar-outline"><div id="f-happy" class="bar-fill h-fill"></div></div></div>
+                    <div class="bar-wrapper"><div class="bar-lbl"><span>Structural Integrity (HP)</span><span id="lbl-hp">0/0</span></div><div class="bar-outline"><div id="f-hp" class="bar-fill l-fill"></div></div></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Combat Attributes</h3>
+                <div class="stat-row"><strong>Strength:</strong> <span id="c-str">0</span></div>
+                <div class="stat-row"><strong>Defense:</strong> <span id="c-def">0</span></div>
+                <div class="stat-row"><strong>Speed:</strong> <span id="c-spd">0</span></div>
+                <div class="stat-row"><strong>Dexterity:</strong> <span id="c-dex">0</span></div>
+            </div>
+
+            <div class="card">
+                <h3>Slotted Hardware Nodes</h3>
+                <div class="stat-row"><strong>Head Array:</strong> <span id="h-head" style="color:#ff9900">None</span></div>
+                <div class="stat-row"><strong>Chest Core:</strong> <span id="h-body" style="color:#ff9900">None</span></div>
+                <div class="stat-row"><strong>Leg Frame:</strong> <span id="h-legs" style="color:#ff9900">None</span></div>
+                <div class="stat-row"><strong>Active Weapon:</strong> <span id="h-weapon" style="color:#e74c3c">None</span></div>
+                <div class="grid-2" style="margin-top:8px;">
+                    <button onclick="stripNode('head')" style="font-size:9px; padding:3px;">Strip Head</button>
+                    <button onclick="stripNode('body')" style="font-size:9px; padding:3px;">Strip Chest</button>
+                    <button onclick="stripNode('legs')" style="font-size:9px; padding:3px;">Strip Legs</button>
+                    <button onclick="stripNode('weapon')" style="font-size:9px; padding:3px;">Ditch Gun</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="center-col">
+            <div id="hosp-banner" class="hosp-banner">LOCKOUT ACTIVE</div>
+
+            <div class="card">
+                <h3>Gym Progression Complex</h3>
+                <div class="grid-2">
+                    <button onclick="train('strength')">Gym Strength Training (-10E)</button>
+                    <button onclick="train('defense')">Gym Defense Training (-10E)</button>
+                    <button onclick="train('speed')">Gym Speed Training (-10E)</button>
+                    <button onclick="train('dexterity')">Gym Dexterity Training (-10E)</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Underground Illicit Crimes Matrix</h3>
+                <div style="display:flex; gap:10px;">
+                    <button style="flex:1; background:#2e7d32;" onclick="runCrime('low')">Street Hustling (-2 Nerve)</button>
+                    <button style="flex:1; background:#ef6c00;" onclick="runCrime('medium')">Organized Operation (-5 Nerve)</button>
+                    <button style="flex:1; background:#c62828;" onclick="runCrime('high')">Cyber Crime Breaches (-9 Nerve)</button>
+                </div>
+                <div id="crime-terminal" class="terminal-feed" style="margin-top:10px;"></div>
+            </div>
+
+            <div class="card">
+                <h3>Global PvP Operations Net Registry</h3>
+                <div id="target-matrix-wrapper">Locating active user telemetry...</div>
+                <div id="battle-terminal" class="terminal-feed" style="margin-top:10px;"></div>
+            </div>
+
+            <div class="grid-2">
+                <div class="card">
+                    <h3>NPC Black Market Armory Merchant</h3>
+                    <div id="shop-container" style="max-height: 250px; overflow-y:auto;">Fetching market manifests...</div>
+                </div>
+                <div class="card">
+                    <h3>Personal Vault Locker Inventory</h3>
+                    <div id="inventory-container" style="max-height: 250px; overflow-y:auto;">Inventory ledger empty.</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>P2P Secure Sub-Net Trading Node</h3>
+                <div style="background:#111; padding:10px; border:1px solid #222; margin-bottom:10px; border-radius:2px;">
+                    <h4 style="font-size:11px; color:#aaa; margin-bottom:6px; text-transform:uppercase;">Propose Secure Direct Counter Offer</h4>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <input type="number" id="trade-target-id" placeholder="Target Player ID" style="background:#050505; color:#fff; border:1px solid #333; padding:5px; font-size:11px; width:110px;">
+                        <input type="number" id="trade-item-id" placeholder="Your Item ID" style="background:#050505; color:#fff; border:1px solid #333; padding:5px; font-size:11px; width:100px;">
+                        <input type="number" id="trade-qty" placeholder="Quantity" value="1" style="background:#050505; color:#fff; border:1px solid #333; padding:5px; font-size:11px; width:70px;">
+                        <input type="number" id="trade-cash" placeholder="Cash Invoiced Request" value="0" style="background:#050505; color:#fff; border:1px solid #333; padding:5px; font-size:11px; width:140px;">
+                        <button onclick="proposeSecureTrade()" style="padding:4px 10px; font-size:10px; background:#ff9900; color:#000;">Transmit Offer</button>
+                    </div>
+                </div>
+                <div id="trade-mailbox-wrapper">Checking secure trading escrow relays...</div>
+            </div>
+
+            <div class="card">
+                <h3>Sub-Net Chat Relays</h3>
+                <div class="chat-area">
+                    <div id="chat-box-out" class="chat-window">Syncing stream...</div>
+                    <div class="chat-input-row">
+                        <input type="text" id="chat-in" placeholder="Broadcast matrix transaction records..." onkeypress="if(event.key==='Enter') dispatchChat()">
+                        <button onclick="dispatchChat()" style="border:none; width:70px; font-size:10px;">Send</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let localPlayer = null;
+        const avatars = { Thief: "🥷", Mercenary: "⚔️", Hacker: "💻", Enforcer: "🛡️" };
+
+        async function pullCoreRequest(url, payload = {}) {
+            const r = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "bypass-tunnel-reminder": "true" },
+                credentials: "include",
+                body: JSON.stringify(payload)
+            });
+            return r.json();
+        }
+
+        async function synchronizeDashboard() {
+            if(!localStorage.player) { window.location.href = "index.html"; return; }
+            localPlayer = JSON.parse(localStorage.player);
+
+            try {
+                const r = await fetch(`/player/${localPlayer.id}`, { headers: { "bypass-tunnel-reminder": "true" }, credentials: "include" });
+                const p = await r.json();
+
+                document.getElementById("p-username").innerHTML = `${p.username} <span style="color:#777; font-size:10px;">ID: ${p.id}</span>`;
+                document.getElementById("hdr-cash").innerText = `$${p.money.toLocaleString()}`;
+                document.getElementById("p-avatar").innerText = avatars[p.avatar] || "👤";
+                document.getElementById("sel-avatar").value = p.avatar;
+
+                document.getElementById("lbl-energy").innerText = `${p.energy}/${p.max_energy}`;
+                document.getElementById("f-energy").style.width = `${(p.energy/p.max_energy)*100}%`;
+                document.getElementById("lbl-nerve").innerText = `${p.nerve}/${p.max_nerve}`;
+                document.getElementById("f-nerve").style.width = `${(p.nerve/p.max_nerve)*100}%`;
+                document.getElementById("lbl-happy").innerText = `${p.happy}/${p.max_happy}`;
+                document.getElementById("f-happy").style.width = `${(p.happy/p.max_happy)*100}%`;
+                document.getElementById("lbl-hp").innerText = `${p.hp}/${p.max_hp}`;
+                document.getElementById("f-hp").style.width = `${(p.hp/p.max_hp)*100}%`;
+
+                document.getElementById("c-str").innerText = p.strength;
+                document.getElementById("c-def").innerText = p.defense;
+                document.getElementById("c-spd").innerText = p.speed;
+                document.getElementById("c-dex").innerText = p.dexterity;
+
+                document.getElementById("h-head").innerText = p.equip_head;
+                document.getElementById("h-body").innerText = p.equip_body;
+                document.getElementById("h-legs").innerText = p.equip_legs;
+                document.getElementById("h-weapon").innerText = p.equip_weapon;
+
+                const now = Math.floor(Date.now() / 1000);
+                const banner = document.getElementById("hosp-banner");
+                if(p.hospital_until > now) {
+                    const diff = p.hospital_until - now;
+                    banner.style.display = "block";
+                    banner.innerText = `🚨 EMERGENCY LOCKOUT DETECTED: ${Math.floor(diff/60)}m ${diff%60}s RECOVERY DELAY`;
+                    toggleInteractivity(true);
+                } else {
+                    banner.style.display = "none";
+                    toggleInteractivity(false);
+                }
+            } catch(e){}
+        }
+
+        function toggleInteractivity(locked) {
+            const btns = document.querySelectorAll(".center-col button");
+            btns.forEach(b => {
+                if(b.parentNode.className === "chat-input-row" || b.innerText === "SEND") return;
+                b.disabled = locked; b.style.opacity = locked ? "0.2" : "1";
+            });
+        }
+
+        async function patchAvatar() {
+            await pullCoreRequest("/avatar/update", { type: document.getElementById("sel-avatar").value });
+            synchronizeDashboard();
+        }
+
+        async function train(stat) {
+            const d = await pullCoreRequest("/train", { stat });
+            if(d.success) synchronizeDashboard(); else alert(d.message);
+        }
+
+        async function runCrime(tier) {
+            const term = document.getElementById("crime-terminal"); term.style.display = "block";
+            term.innerText = "> Initializing dark routing proxies...";
+            const d = await pullCoreRequest("/crime", { tier });
+            term.innerText = `> ${d.message}`;
+            synchronizeDashboard(); loadInventory();
+        }
+
+        async function loadTargets() {
+            try {
+                const r = await fetch("/players/list", { headers: { "bypass-tunnel-reminder": "true" }, credentials: "include" });
+                const users = await r.json();
+                const wrap = document.getElementById("target-matrix-wrapper"); wrap.innerHTML = "";
+                const now = Math.floor(Date.now() / 1000);
+
+                if(users.length === 0) { wrap.innerHTML = "<small style='color:#555;'>No external player telemetry found.</small>"; return; }
+                users.forEach(u => {
+                    const activeHosp = u.hospital_until > now;
+                    let actionContext = `<button onclick="engagePvP(${u.id})" style="padding:3px 8px; font-size:10px; background:#b94a48;">Attack Vector</button>`;
+                    if(activeHosp) actionContext = `<span style="color:#ef5350; font-size:10px; font-weight:bold;">CRITICAL RECOVERY</span>`;
+
+                    wrap.innerHTML += `
+                        <div class="list-entry">
+                            <div><strong>${avatars[u.avatar]||"👤"} ${u.username}</strong> <small style="color:#666; margin-left:5px;">(ID: ${u.id}) Total Stats: ${u.total_stats}</small></div>
+                            <div>${actionContext}</div>
+                        </div>
+                    `;
+                });
+            } catch(e){}
+        }
+
+        async function engagePvP(targetId) {
+            const term = document.getElementById("battle-terminal"); term.style.display = "block"; term.innerHTML = "> Compiling accurate stat ratio distributions...";
+            const d = await pullCoreRequest("/attack", { targetId });
+            if(!d.success) { alert(d.message); term.style.display = "none"; return; }
+            term.innerHTML = ""; d.log.forEach(l => term.innerHTML += `> ${l}<br>`);
+            synchronizeDashboard();
+        }
+
+        async function loadShop() {
+            const r = await fetch("/shop/items", { headers: { "bypass-tunnel-reminder": "true" } });
+            const items = await r.json();
+            const container = document.getElementById("shop-container"); container.innerHTML = "";
+
+            items.forEach(i => {
+                let metrics = i.type === 'armor' ? `Slot: ${i.slot.toUpperCase()} (+${i.stat_bonus} Def)` : (i.type === 'weapon' ? `Damage Bonus: +${i.stat_bonus}` : `Consumable Class`);
+                container.innerHTML += `
+                    <div class="list-entry" style="font-size:11px; padding:6px;">
+                        <div style="max-width:70%;">
+                            <strong>${i.name}</strong> <small style="color:#777;">(Item ID: ${i.id})</small><br>
+                            <span style="font-size:9px; color:#888;">${i.description}</span><br>
+                            <span style="font-size:9px; color:#ff9900; font-weight:bold;">${metrics}</span>
+                        </div>
+                        <div style="text-align:right;">
+                            <strong style="color:#27ae60;">$${i.price.toLocaleString()}</strong><br>
+                            <button onclick="buyMerchantItem(${i.id})" style="padding:2px 4px; font-size:9px; margin-top:3px;">Buy</button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        async function buyMerchantItem(itemId) {
+            const d = await pullCoreRequest("/shop/buy", { itemId });
+            if(d.success) { synchronizeDashboard(); loadInventory(); } else { alert(d.message); }
+        }
+
+        async function loadInventory() {
+            const r = await fetch("/inventory", { headers: { "bypass-tunnel-reminder": "true" }, credentials: "include" });
+            const vault = await r.json();
+            const container = document.getElementById("inventory-container"); container.innerHTML = "";
+
+            if(vault.length === 0) { container.innerHTML = "<small style='color:#555;'>No modules located within personal locker slots.</small>"; return; }
+            
+            vault.forEach(v => {
+                let interactiveBtn = "";
+                if(v.type === 'armor' || v.type === 'weapon') interactiveBtn = `<button onclick="equipHardware(${v.id})" style="padding:2px 5px; font-size:9px; background:#1f3a52;">Equip</button>`;
+                else if(v.type === 'consumable') interactiveBtn = `<button onclick="useConsumable(${v.id})" style="padding:2px 5px; font-size:9px; background:#1e4620;">Use</button>`;
+
+                container.innerHTML += `
+                    <div class="list-entry" style="font-size:11px; padding:6px; flex-direction:column; align-items:stretch; gap:4px;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <strong>${v.name} <span style="color:#ff9900;">[x${v.quantity}]</span></strong>
+                            <small style="color:#555;">ID Code: ${v.id}</small>
+                        </div>
+                        <p style="font-size:9px; color:#777;">${v.description}</p>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:2px; border-top:1px dashed #222; padding-top:4px;">
+                            <div><button onclick="liquidatePawn(${v.id})" style="padding:2px 5px; font-size:9px; background:#4c1c1c; border-color:#5c2c2c;">Pawn ($${Math.floor(v.price*0.5)})</button></div>
+                            <div>${interactiveBtn}</div>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        async function liquidatePawn(itemId) {
+            const d = await pullCoreRequest("/inventory/pawn", { itemId });
+            if(d.success) { synchronizeDashboard(); loadInventory(); } else { alert(d.message); }
+        }
+
+        async function equipHardware(itemId) {
+            const d = await pullCoreRequest("/equipment/equip", { itemId });
+            if(d.success) synchronizeDashboard(); else alert(d.message);
+        }
+
+        async function useConsumable(itemId) {
+            const d = await pullCoreRequest("/inventory/use", { itemId });
+            if(d.success) { alert(d.message); synchronizeDashboard(); loadInventory(); } else { alert(d.message); }
+        }
+
+        async function stripNode(slot) {
+            const d = await pullCoreRequest("/equipment/unequip", { slot });
+            if(d.success) synchronizeDashboard();
+        }
+
+        async function proposeSecureTrade() {
+            const receiverId = parseInt(document.getElementById("trade-target-id").value);
+            const itemId = parseInt(document.getElementById("trade-item-id").value);
+            const qty = parseInt(document.getElementById("trade-qty").value);
+            const cashDemand = parseInt(document.getElementById("trade-cash").value);
+
+            if(!receiverId || !itemId || !qty) { alert("Complete all contract offer field parameters."); return; }
+            
+            const d = await pullCoreRequest("/trades/propose", { receiverId, itemId, qty, cashDemand });
+            if(d.success) { alert("Offer transmitted to secure player escrow ledger."); loadInventory(); loadEscrowMailbox(); } else { alert(d.message); }
+        }
+
+        async function loadEscrowMailbox() {
+            const r = await fetch("/trades/mailbox", { headers: { "bypass-tunnel-reminder": "true" }, credentials: "include" });
+            const elements = await r.json();
+            const wrapper = document.getElementById("trade-mailbox-wrapper"); wrapper.innerHTML = "";
+
+            if(elements.length === 0) { wrapper.innerHTML = "<small style='color:#444;'>No active escrow transaction contracts pending.</small>"; return; }
+            
+            elements.forEach(t => {
+                const incoming = t.receiver_id === localPlayer.id;
+                let interfaceConsole = "";
+
+                if(incoming) {
+                    interfaceConsole = `
+                        <div style="margin-top:5px; display:flex; gap:5px;">
+                            <button onclick="resolveContract(${t.id}, 'ACCEPT')" style="padding:2px 6px; font-size:9px; background:#1b5e20;">Accept Trade Invoice</button>
+                            <button onclick="resolveContract(${t.id}, 'DECLINE')" style="padding:2px 6px; font-size:9px; background:#b71c1c;">Decline</button>
+                        </div>
+                    `;
+                } else {
+                    interfaceConsole = `<span style="font-size:10px; color:#ff9900; font-weight:bold;">OUTBOUND ESCROW TRANSACTION DELIVERY</span>`;
+                }
+
+                wrapper.innerHTML += `
+                    <div class="list-entry" style="flex-direction:column; align-items:stretch; border-left:2px solid #ff9900; padding:6px; background:#111;">
+                        <div style="display:flex; justify-content:space-between; font-size:11px;">
+                            <div><strong>From: ${t.sender} ➔ To: ${t.receiver}</strong></div>
+                            <div style="color:#aaa;">Invoice ID: #${t.id}</div>
+                        </div>
+                        <p style="font-size:10px; color:#888; margin-top:2px;">
+                            Offering Cargo: <strong style="color:#fff;">${t.sender_qty}x [${t.item_name}]</strong> | Cash Demand: <strong style="color:#27ae60;">$${t.cash_demand.toLocaleString()}</strong>
+                        </p>
+                        ${interfaceConsole}
+                    </div>
+                `;
+            });
+        }
+
+        async function resolveContract(tradeId, action) {
+            const d = await pullCoreRequest("/trades/resolve", { tradeId, action });
+            if(d.success) { synchronizeDashboard(); loadInventory(); loadEscrowMailbox(); } else { alert(d.message); }
+        }
+
+        async function fetchChatFeed() {
+            try {
+                const r = await fetch("/chat/load", { headers: { "bypass-tunnel-reminder": "true" } });
+                const logs = await r.json(); const out = document.getElementById("chat-box-out"); out.innerHTML = "";
+                logs.forEach(l => out.innerHTML += `[${l.username}]: ${l.message}<br>`);
+            } catch(e){}
+        }
+
+        async function dispatchChat() {
+            const input = document.getElementById("chat-in"); const msg = input.value; if(!msg.trim()) return;
+            input.value = ""; await pullCoreRequest("/chat/send", { msg }); fetchChatFeed();
+        }
+
+        setInterval(synchronizeDashboard, 1500);
+        setInterval(loadTargets, 4000);
+        setInterval(fetchChatFeed, 2500);
+        setInterval(loadEscrowMailbox, 5000);
+
+        synchronizeDashboard(); loadShop(); loadInventory(); loadTargets(); fetchChatFeed(); loadEscrowMailbox();
+    </script>
+</body>
+</html>

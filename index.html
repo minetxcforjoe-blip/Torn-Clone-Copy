@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Torn Underground - Network Authentication Gateway</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #0c0c0c; color: #aaa; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .login-panel { background: #151515; border: 1px solid #252525; border-top: 3px solid #ff9900; border-radius: 4px; padding: 25px; width: 100%; max-width: 380px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+        .login-panel h2 { color: #fff; font-size: 16px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; text-align: center; }
+        .login-panel p { font-size: 11px; color: #555; text-align: center; margin-bottom: 20px; text-transform: uppercase; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-size: 11px; text-transform: uppercase; margin-bottom: 5px; color: #888; letter-spacing: 0.5px; }
+        .form-group input { width: 100%; background: #090909; border: 1px solid #2a2a2a; color: #fff; padding: 10px; font-size: 13px; border-radius: 2px; }
+        .form-group input:focus { outline: none; border-color: #ff9900; }
+        button { width: 100%; background: #222; border: 1px solid #333; color: #fff; padding: 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; cursor: pointer; border-radius: 2px; transition: all 0.2s; margin-top: 8px; }
+        button:hover { background: #ff9900; color: #000; border-color: #ff9900; }
+        .status-msg { font-size: 11px; text-align: center; margin-top: 15px; min-height: 15px; font-weight: bold; }
+        .err { color: #e74c3c; } .ok { color: #2ecc71; }
+    </style>
+</head>
+<body>
+
+    <div class="login-panel">
+        <h2>Authentication Node</h2>
+        <p>Access Portal Ledger</p>
+
+        <div class="form-group">
+            <label>Network Username Call Sign</label>
+            <input type="text" id="user-in" placeholder="Enter identification label...">
+        </div>
+
+        <div class="form-group">
+            <label>Security Access Code</label>
+            <input type="password" id="pass-in" placeholder="••••••••">
+        </div>
+
+        <button onclick="executeAuth('/login')">Authorize Link Sequence</button>
+        <button onclick="executeAuth('/register')" style="background:#111; color:#777; border-color:#222; margin-top:5px;">Create New Network Record</button>
+
+        <div id="status-out" class="status-msg"></div>
+    </div>
+
+    <script>
+        async function executeAuth(targetRoute) {
+            const username = document.getElementById("user-in").value;
+            const password = document.getElementById("pass-in").value;
+            const status = document.getElementById("status-out");
+            
+            status.className = "status-msg"; status.innerText = "Transmitting parameters...";
+
+            if(!username.trim() || !password.trim()) {
+                status.className = "status-msg err";
+                status.innerText = "Error: Input parameters cannot be null.";
+                return;
+            }
+
+            try {
+                const response = await fetch(targetRoute, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", "bypass-tunnel-reminder": "true" },
+                    body: JSON.stringify({ username, password })
+                });
+                const parsedData = await response.json();
+
+                if(parsedData.success) {
+                    if(targetRoute === '/login') {
+                        status.className = "status-msg ok";
+                        status.innerText = "Link verified! Syncing terminal matrices...";
+                        localStorage.player = JSON.stringify(parsedData.user);
+                        setTimeout(() => { window.location.href = "game.html"; }, 1000);
+                    } else {
+                        status.className = "status-msg ok";
+                        status.innerText = "Record creation confirmed. Proceed to authorize link.";
+                    }
+                } else {
+                    status.className = "status-msg err";
+                    status.innerText = `Rejected: ${parsedData.message || "Execution mismatch error."}`;
+                }
+            } catch(e) {
+                status.className = "status-msg err";
+                status.innerText = "Network execution timeout framework crash.";
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,7 +1,9 @@
 const express = require("express");
 const sqlite3 = require("sqlite3").verbose();
 const session = require("express-session");
+const bcrypt = require("bcrypt");
 const path = require("path");
+require("dotenv").config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,18 +13,31 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
+const SESSION_SECRET = process.env.SESSION_SECRET || "torn-ultimate-mmo-secret-key-2026";
+
 app.use(session({
-    secret: "torn-ultimate-mmo-secret-key-2026",
+    secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
+    cookie: { 
+        secure: process.env.NODE_ENV === "production",
+        httpOnly: true,
+        sameSite: "strict",
+        maxAge: 24 * 60 * 60 * 1000 
+    }
 }));
+
+// Middleware to validate session
+function requireSession(req, res, next) {
+    if (!req.session.user) return res.status(401).json({ success: false, message: "Unauthorized" });
+    next();
+}
 
 // ===== MASTER DATABASE SCHEMA DEPLOYMENT =====
 db.serialize(() => {
     db.run(`
     CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password TEXT,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE, password_hash TEXT,
         money INTEGER DEFAULT 5000, energy INTEGER DEFAULT 100, nerve INTEGER DEFAULT 20,
         hp INTEGER DEFAULT 100, happy INTEGER DEFAULT 100, max_energy INTEGER DEFAULT 100,
         max_nerve INTEGER DEFAULT 20, max_hp INTEGER DEFAULT 100, max_happy INTEGER DEFAULT 100,
@@ -105,25 +120,38 @@ function isHospitalized(user) { return user.hospital_until > Math.floor(Date.now
 // ===== ENDPOINTS CORE =====
 app.post("/register", (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password) return res.json({ success: false, message: "Invalid profile data format." });
-    db.run("INSERT INTO users (username, password) VALUES (?, ?)", [username, password], (err) => {
-        if (err) return res.json({ success: false, message: "Network identification marker already claimed." });
-        res.json({ success: true });
+    if (!username || !password || username.length < 3 || password.length < 6) {
+        return res.json({ success: false, message: "Username (3+ chars) and password (6+ chars) required." });
+    }
+    
+    const saltRounds = 10;
+    bcrypt.hash(password, saltRounds, (err, hash) => {
+        if (err) return res.json({ success: false, message: "Server error." });
+        
+        db.run("INSERT INTO users (username, password_hash) VALUES (?, ?)", [username, hash], (err) => {
+            if (err) return res.json({ success: false, message: "Username already taken." });
+            res.json({ success: true });
+        });
     });
 });
 
 app.post("/login", (req, res) => {
     const { username, password } = req.body;
-    db.get("SELECT id, username FROM users WHERE username = ? AND password = ?", [username, password], (err, user) => {
-        if (err || !user) return res.json({ success: false, message: "Authorization parameters mismatch." });
-        req.session.user = user;
-        res.json({ success: true, user });
+    db.get("SELECT id, username, password_hash FROM users WHERE username = ?", [username], (err, user) => {
+        if (err || !user) return res.json({ success: false, message: "Invalid credentials." });
+        
+        bcrypt.compare(password, user.password_hash, (err, match) => {
+            if (!match) return res.json({ success: false, message: "Invalid credentials." });
+            
+            req.session.user = { id: user.id, username: user.username };
+            res.json({ success: true, user: { id: user.id, username: user.username } });
+        });
     });
 });
 
 app.get("/player/:id", (req, res) => {
     db.get("SELECT id, username, money, energy, nerve, hp, happy, max_energy, max_nerve, max_hp, max_happy, strength, defense, speed, dexterity, hospital_until, avatar, equip_head, equip_body, equip_legs, equip_weapon FROM users WHERE id = ?", [req.params.id], (err, row) => {
-        if (err || !row) return res.status(404).json({ error: "Missing records" });
+        if (err || !row) return res.status(404).json({ error: "User not found" });
         res.json(row);
     });
 });
@@ -135,18 +163,20 @@ app.get("/players/list", (req, res) => {
     });
 });
 
-app.post("/avatar/update", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
+app.post("/avatar/update", requireSession, (req, res) => {
+    const allowed = ["Thief", "Mercenary", "Hacker", "Enforcer"];
+    if (!allowed.includes(req.body.type)) return res.json({ success: false });
     db.run("UPDATE users SET avatar = ? WHERE id = ?", [req.body.type, req.session.user.id], () => res.json({ success: true }));
 });
 
-app.post("/train", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const id = req.session.user.id; const { stat } = req.body;
+app.post("/train", requireSession, (req, res) => {
+    const { stat } = req.body;
+    const allowed = ["strength", "defense", "speed", "dexterity"];
+    if (!allowed.includes(stat)) return res.json({ success: false });
 
-    db.get(`SELECT energy, happy, max_happy, hospital_until, ${stat} FROM users WHERE id = ?`, [id], (err, user) => {
-        if (!user || isHospitalized(user)) return res.json({ success: false, message: "Gym lockout active while in hospitalization." });
-        if (user.energy < 10) return res.json({ success: false, message: "Insufficient energy allocation." });
+    db.get(`SELECT energy, happy, max_happy, hospital_until, ${stat} FROM users WHERE id = ?`, [req.session.user.id], (err, user) => {
+        if (!user || isHospitalized(user)) return res.json({ success: false, message: "Cannot train while hospitalized." });
+        if (user.energy < 10) return res.json({ success: false, message: "Insufficient energy." });
 
         const currentVal = user[stat];
         let baseGain = 12 - (currentVal * 0.012);
@@ -155,43 +185,44 @@ app.post("/train", (req, res) => {
         const dynamicHappyBonus = 1 + (user.happy / user.max_happy);
         const finalCalculatedGain = Math.max(1, Math.floor(baseGain * dynamicHappyBonus));
 
-        db.run(`UPDATE users SET ${stat} = ${stat} + ?, energy = energy - 10, happy = MAX(0, happy - 3) WHERE id = ?`, [finalCalculatedGain, id], () => {
+        db.run(`UPDATE users SET ${stat} = ${stat} + ?, energy = energy - 10, happy = MAX(0, happy - 3) WHERE id = ?`, [finalCalculatedGain, req.session.user.id], () => {
             res.json({ success: true, gain: finalCalculatedGain });
         });
     });
 });
 
-app.post("/crime", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const id = req.session.user.id; const { tier } = req.body;
+app.post("/crime", requireSession, (req, res) => {
+    const { tier } = req.body;
+    const tierConfig = {
+        low: { nerveCost: 2, lowPayout: 200, highPayout: 1500, baseSuccessChance: 0.82, lootFilter: 0.45 },
+        medium: { nerveCost: 5, lowPayout: 1200, highPayout: 4500, baseSuccessChance: 0.62, lootFilter: 0.22 },
+        high: { nerveCost: 9, lowPayout: 4500, highPayout: 18000, baseSuccessChance: 0.38, lootFilter: 0.09 }
+    };
 
-    db.get("SELECT * FROM users WHERE id = ?", [id], (err, user) => {
-        if (!user || isHospitalized(user)) return res.json({ success: false, message: "Action restricted by operational health capacity." });
+    if (!tierConfig[tier]) return res.status(400).json({ success: false });
 
-        let nerveCost, lowPayout, highPayout, baseSuccessChance, lootFilter;
-        if (tier === 'low') { nerveCost = 2; lowPayout = 200; highPayout = 1500; baseSuccessChance = 0.82; lootFilter = 0.45; }
-        else if (tier === 'medium') { nerveCost = 5; lowPayout = 1200; highPayout = 4500; baseSuccessChance = 0.62; lootFilter = 0.22; }
-        else if (tier === 'high') { nerveCost = 9; lowPayout = 4500; highPayout = 18000; baseSuccessChance = 0.38; lootFilter = 0.09; }
-        else return res.status(400).json({ success: false });
+    db.get("SELECT * FROM users WHERE id = ?", [req.session.user.id], (err, user) => {
+        if (!user || isHospitalized(user)) return res.json({ success: false, message: "Cannot commit crime while hospitalized." });
 
-        if (user.nerve < nerveCost) return res.json({ success: false, message: `Operation dropped: Requires ${nerveCost} nerve focus.` });
+        const config = tierConfig[tier];
+        if (user.nerve < config.nerveCost) return res.json({ success: false, message: `Requires ${config.nerveCost} nerve.` });
 
         const skillFactor = (user.dexterity + user.speed) / 250;
-        const finalSuccessProbability = Math.min(0.95, baseSuccessChance + skillFactor);
+        const finalSuccessProbability = Math.min(0.95, config.baseSuccessChance + skillFactor);
 
         if (Math.random() < finalSuccessProbability) {
-            const liquidCashReward = Math.floor(Math.random() * (highPayout - lowPayout + 1)) + lowPayout;
+            const liquidCashReward = Math.floor(Math.random() * (config.highPayout - config.lowPayout + 1)) + config.lowPayout;
             
-            db.all("SELECT * FROM items WHERE drop_chance > 0 AND drop_chance <= ?", [lootFilter], (err, dropPool) => {
+            db.all("SELECT * FROM items WHERE drop_chance > 0 AND drop_chance <= ?", [config.lootFilter], (err, dropPool) => {
                 let foundItem = null;
                 if (dropPool && dropPool.length > 0 && Math.random() < 0.45) {
                     foundItem = dropPool[Math.floor(Math.random() * dropPool.length)];
                 }
 
                 db.serialize(() => {
-                    db.run("UPDATE users SET money = money + ?, nerve = nerve - ? WHERE id = ?", [liquidCashReward, nerveCost, id]);
+                    db.run("UPDATE users SET money = money + ?, nerve = nerve - ? WHERE id = ?", [liquidCashReward, config.nerveCost, req.session.user.id]);
                     if (foundItem) {
-                        db.run(`INSERT INTO user_items (user_id, item_id, quantity) VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) DO UPDATE SET quantity = quantity + 1`, [id, foundItem.id], () => {
+                        db.run(`INSERT INTO user_items (user_id, item_id, quantity) VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) DO UPDATE SET quantity = quantity + 1`, [req.session.user.id, foundItem.id], () => {
                             res.json({ success: true, message: `CRIME SUCCESS! Net yield: +$${liquidCashReward.toLocaleString()} and secured item: [${foundItem.name}]` });
                         });
                     } else {
@@ -202,14 +233,14 @@ app.post("/crime", (req, res) => {
         } else {
             if (Math.random() > 0.40 || tier === 'low') {
                 const penaltyAssetFine = Math.floor(user.money * 0.06);
-                db.run("UPDATE users SET money = MAX(0, money - ?), nerve = nerve - ? WHERE id = ?", [penaltyAssetFine, nerveCost, id], () => {
-                    res.json({ success: true, message: `MISSION FAILED: Evaded tactical police grid but lost $${penaltyAssetFine.toLocaleString()} in clean up costs.` });
+                db.run("UPDATE users SET money = MAX(0, money - ?), nerve = nerve - ? WHERE id = ?", [penaltyAssetFine, config.nerveCost, req.session.user.id], () => {
+                    res.json({ success: true, message: `MISSION FAILED: Lost $${penaltyAssetFine.toLocaleString()}.` });
                 });
             } else {
                 const isolationDuration = tier === 'medium' ? 120 : 300;
                 const releaseTimestamp = Math.floor(Date.now() / 1000) + isolationDuration;
-                db.run("UPDATE users SET nerve = nerve - ?, hospital_until = ?, hp = 5 WHERE id = ?", [nerveCost, releaseTimestamp, id], () => {
-                    res.json({ success: true, message: `CRITICAL FAIL: Cornered by swat sweep teams. Hospital locked out for ${isolationDuration / 60} minutes.` });
+                db.run("UPDATE users SET nerve = nerve - ?, hospital_until = ?, hp = 5 WHERE id = ?", [config.nerveCost, releaseTimestamp, req.session.user.id], () => {
+                    res.json({ success: true, message: `CRITICAL FAIL: Hospitalized for ${isolationDuration / 60} minutes.` });
                 });
             }
         }
@@ -222,18 +253,17 @@ app.get("/shop/items", (req, res) => {
     });
 });
 
-app.post("/shop/buy", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const uId = req.session.user.id; const { itemId } = req.body;
-
+app.post("/shop/buy", requireSession, (req, res) => {
+    const { itemId } = req.body;
+    
     db.get("SELECT price FROM items WHERE id = ?", [itemId], (err, targetItem) => {
-        if (!targetItem) return res.json({ success: false, message: "Item profile offline." });
-        db.get("SELECT money FROM users WHERE id = ?", [uId], (err, user) => {
-            if (user.money < targetItem.price) return res.json({ success: false, message: "Liquid asset balance check failed." });
+        if (!targetItem) return res.json({ success: false, message: "Item not found." });
+        db.get("SELECT money FROM users WHERE id = ?", [req.session.user.id], (err, user) => {
+            if (user.money < targetItem.price) return res.json({ success: false, message: "Insufficient funds." });
             
             db.serialize(() => {
-                db.run("UPDATE users SET money = money - ? WHERE id = ?", [targetItem.price, uId]);
-                db.run("INSERT INTO user_items (user_id, item_id, quantity) VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) DO UPDATE SET quantity = quantity + 1", [uId, itemId], () => {
+                db.run("UPDATE users SET money = money - ? WHERE id = ?", [targetItem.price, req.session.user.id]);
+                db.run("INSERT INTO user_items (user_id, item_id, quantity) VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) DO UPDATE SET quantity = quantity + 1", [req.session.user.id, itemId], () => {
                     res.json({ success: true });
                 });
             });
@@ -241,8 +271,7 @@ app.post("/shop/buy", (req, res) => {
     });
 });
 
-app.get("/inventory", (req, res) => {
-    if (!req.session.user) return res.status(401).json([]);
+app.get("/inventory", requireSession, (req, res) => {
     db.all(`
         SELECT items.id, items.name, items.type, items.slot, items.price, items.description, items.stat_bonus, user_items.quantity 
         FROM user_items JOIN items ON user_items.item_id = items.id 
@@ -252,83 +281,83 @@ app.get("/inventory", (req, res) => {
     });
 });
 
-app.post("/inventory/pawn", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const uId = req.session.user.id; const { itemId } = req.body;
+app.post("/inventory/pawn", requireSession, (req, res) => {
+    const { itemId } = req.body;
 
     db.get(`
         SELECT user_items.quantity, items.price, items.name 
         FROM user_items JOIN items ON user_items.item_id = items.id 
         WHERE user_items.user_id = ? AND user_items.item_id = ? AND user_items.quantity > 0
-    `, [uId, itemId], (err, match) => {
-        if (!match) return res.json({ success: false, message: "Item profile not found in personal inventory lockers." });
+    `, [req.session.user.id, itemId], (err, match) => {
+        if (!match) return res.json({ success: false, message: "Item not in inventory." });
 
         const liquidationValue = Math.floor(match.price * 0.50);
         db.serialize(() => {
-            db.run("UPDATE user_items SET quantity = quantity - 1 WHERE user_id = ? AND item_id = ?", [uId, itemId]);
-            db.run("UPDATE users SET money = money + ? WHERE id = ?", [liquidationValue, uId], () => {
-                res.json({ success: true, message: `Liquidated 1x [${match.name}] to Pawn Hub for $${liquidationValue.toLocaleString()} credit.` });
+            db.run("UPDATE user_items SET quantity = quantity - 1 WHERE user_id = ? AND item_id = ?", [req.session.user.id, itemId]);
+            db.run("UPDATE users SET money = money + ? WHERE id = ?", [liquidationValue, req.session.user.id], () => {
+                res.json({ success: true, message: `Sold 1x [${match.name}] for $${liquidationValue.toLocaleString()}.` });
             });
         });
     });
 });
 
-app.post("/equipment/equip", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const uId = req.session.user.id; const { itemId } = req.body;
+app.post("/equipment/equip", requireSession, (req, res) => {
+    const { itemId } = req.body;
 
-    db.get("SELECT name, slot FROM user_items JOIN items ON user_items.item_id = items.id WHERE user_items.user_id = ? AND user_items.item_id = ? AND user_items.quantity > 0", [uId, itemId], (err, match) => {
-        if (!match) return res.json({ success: false, message: "Target module unowned." });
+    db.get("SELECT name, slot FROM user_items JOIN items ON user_items.item_id = items.id WHERE user_items.user_id = ? AND user_items.item_id = ? AND user_items.quantity > 0", [req.session.user.id, itemId], (err, match) => {
+        if (!match) return res.json({ success: false, message: "Item not owned." });
         
         let targetSlotColumn = "";
         if (match.slot === "head") targetSlotColumn = "equip_head";
         else if (match.slot === "body") targetSlotColumn = "equip_body";
         else if (match.slot === "legs") targetSlotColumn = "equip_legs";
         else if (match.slot === "weapon") targetSlotColumn = "equip_weapon";
-        else return res.json({ success: false, message: "Static cargo can't be slotted to tactical gear matrix." });
+        else return res.json({ success: false, message: "Invalid slot." });
 
-        db.run(`UPDATE users SET ${targetSlotColumn} = ? WHERE id = ?`, [match.name, uId], () => res.json({ success: true }));
+        db.run(`UPDATE users SET ${targetSlotColumn} = ? WHERE id = ?`, [match.name, req.session.user.id], () => res.json({ success: true }));
     });
 });
 
-app.post("/equipment/unequip", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const targetSlotField = `equip_${req.body.slot}`;
+app.post("/equipment/unequip", requireSession, (req, res) => {
+    const { slot } = req.body;
+    const allowed = ["head", "body", "legs", "weapon"];
+    if (!allowed.includes(slot)) return res.json({ success: false });
+    
+    const targetSlotField = `equip_${slot}`;
     db.run(`UPDATE users SET ${targetSlotField} = 'None' WHERE id = ?`, [req.session.user.id], () => res.json({ success: true }));
 });
 
-app.post("/inventory/use", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const uId = req.session.user.id; const { itemId } = req.body;
+app.post("/inventory/use", requireSession, (req, res) => {
+    const { itemId } = req.body;
 
-    db.get("SELECT items.id, items.name, items.type, items.stat_bonus FROM user_items JOIN items ON user_items.item_id = items.id WHERE user_items.user_id = ? AND user_items.item_id = ? AND user_items.quantity > 0", [uId, itemId], (err, match) => {
-        if (!match || match.type !== 'consumable') return res.json({ success: false, message: "Target asset is not consumable cargo." });
+    db.get("SELECT items.id, items.name, items.type, items.stat_bonus FROM user_items JOIN items ON user_items.item_id = items.id WHERE user_items.user_id = ? AND user_items.item_id = ? AND user_items.quantity > 0", [req.session.user.id, itemId], (err, match) => {
+        if (!match || match.type !== 'consumable') return res.json({ success: false, message: "Cannot use this item." });
 
         db.serialize(() => {
-            db.run("UPDATE user_items SET quantity = quantity - 1 WHERE user_id = ? AND item_id = ?", [uId, itemId]);
+            db.run("UPDATE user_items SET quantity = quantity - 1 WHERE user_id = ? AND item_id = ?", [req.session.user.id, itemId]);
             if (match.name === "Coffee" || match.name === "Chocolate Bar" || match.name === "Energy Drink") {
-                db.run("UPDATE users SET energy = MIN(max_energy, energy + ?) WHERE id = ?", [match.stat_bonus, uId], () => {
-                    res.json({ success: true, message: `Injected packet payload [${match.name}]. Energy modified: +${match.stat_bonus}.` });
+                db.run("UPDATE users SET energy = MIN(max_energy, energy + ?) WHERE id = ?", [match.stat_bonus, req.session.user.id], () => {
+                    res.json({ success: true, message: `Used [${match.name}]. Energy +${match.stat_bonus}.` });
                 });
             } else {
                 let queryUpdate = "UPDATE users SET hp = MIN(max_hp, hp + ?) WHERE id = ?";
                 if (match.name === "Painkillers") { queryUpdate = "UPDATE users SET hp = MIN(max_hp, hp + ?), hospital_until = 0 WHERE id = ?"; }
-                db.run(queryUpdate, [match.stat_bonus, uId], () => {
-                    res.json({ success: true, message: `Deployed medical vector [${match.name}]. Vitality reinforcement: +${match.stat_bonus}.` });
+                db.run(queryUpdate, [match.stat_bonus, req.session.user.id], () => {
+                    res.json({ success: true, message: `Used [${match.name}]. HP +${match.stat_bonus}.` });
                 });
             }
         });
     });
 });
 
-app.post("/attack", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const attackerId = req.session.user.id; const { targetId } = req.body;
+app.post("/attack", requireSession, (req, res) => {
+    const attackerId = req.session.user.id;
+    const { targetId } = req.body;
 
     db.get("SELECT * FROM users WHERE id = ?", [attackerId], (err, att) => {
         db.get("SELECT * FROM users WHERE id = ?", [targetId], (err, tar) => {
-            if (!att || !tar || isHospitalized(att) || isHospitalized(tar)) return res.json({ success: false, message: "Link sequence terminated: Operational capability verification check failed." });
-            if (att.energy < 25) return res.json({ success: false, message: "Minimum 25 operational energy units required." });
+            if (!att || !tar || isHospitalized(att) || isHospitalized(tar)) return res.json({ success: false, message: "Cannot attack." });
+            if (att.energy < 25) return res.json({ success: false, message: "Need 25 energy." });
 
             db.all("SELECT name, type, stat_bonus, stat_penalty FROM items WHERE name IN (?,?,?,?,?,?,?,?)", 
             [att.equip_head, att.equip_body, att.equip_legs, att.equip_weapon, tar.equip_head, tar.equip_body, tar.equip_legs, tar.equip_weapon], (err, gears) => {
@@ -352,7 +381,7 @@ app.post("/attack", (req, res) => {
                 const baselineHitChance = Math.max(0.10, Math.min(0.90, 0.50 + (Math.log10(accuracyRatio) * 0.30)));
                 
                 const logs = [];
-                logs.push(`ENGAGED VECTOR PINPOINT: Attack vector launched at ${tar.username}...`);
+                logs.push(`Attack on ${tar.username}...`);
                 
                 db.serialize(() => {
                     db.run("UPDATE users SET energy = energy - 25 WHERE id = ?", [attackerId]);
@@ -365,17 +394,17 @@ app.post("/attack", (req, res) => {
                         const cashSiphoned = Math.floor(tar.money * 0.20);
                         const emergencyLockTime = Math.floor(Date.now() / 1000) + 240;
 
-                        logs.push(`HIT CONFIRMED: Breach calculated for ${finalDamageYield} structural impact damage points!`);
-                        logs.push(`OPERATIONAL OUTCOME: Victory confirmed. Extracted $${cashSiphoned.toLocaleString()} pipeline liquidity assets.`);
+                        logs.push(`Hit! Damage: ${finalDamageYield}`);
+                        logs.push(`Victory! Stole $${cashSiphoned.toLocaleString()}.`);
 
                         db.run("UPDATE users SET money = money + ? WHERE id = ?", [cashSiphoned, attackerId]);
                         db.run("UPDATE users SET money = MAX(0, money - ?), hospital_until = ?, hp = 0 WHERE id = ?", [cashSiphoned, emergencyLockTime, targetId], () => {
                             res.json({ success: true, log: logs });
                         });
                     } else {
-                        logs.push(`EVASION COUNTER: Tactical target evaded your velocity payload vector completely.`);
+                        logs.push(`Missed!`);
                         const selfHospExpiry = Math.floor(Date.now() / 1000) + 180;
-                        logs.push(`CRITICAL BLOW: Target execution counter-strike successful. You are hospitalized.`);
+                        logs.push(`Counter-attack! You're hospitalized.`);
                         db.run("UPDATE users SET hospital_until = ?, hp = 0 WHERE id = ?", [selfHospExpiry, attackerId], () => {
                             res.json({ success: true, log: logs });
                         });
@@ -386,8 +415,7 @@ app.post("/attack", (req, res) => {
     });
 });
 
-app.get("/trades/mailbox", (req, res) => {
-    if (!req.session.user) return res.status(401).json([]);
+app.get("/trades/mailbox", requireSession, (req, res) => {
     const uId = req.session.user.id;
 
     db.all(`
@@ -402,13 +430,16 @@ app.get("/trades/mailbox", (req, res) => {
     });
 });
 
-app.post("/trades/propose", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
+app.post("/trades/propose", requireSession, (req, res) => {
     const sId = req.session.user.id;
     const { receiverId, itemId, qty, cashDemand } = req.body;
 
+    if (!Number.isInteger(receiverId) || !Number.isInteger(itemId) || !Number.isInteger(qty) || qty < 1) {
+        return res.json({ success: false, message: "Invalid trade parameters." });
+    }
+
     db.get("SELECT quantity FROM user_items WHERE user_id = ? AND item_id = ? AND quantity >= ?", [sId, itemId, qty], (err, check) => {
-        if (!check) return res.json({ success: false, message: "Inventory quantities verification check failed." });
+        if (!check) return res.json({ success: false, message: "Insufficient quantity." });
 
         db.run(`
             INSERT INTO trades (sender_id, receiver_id, sender_item_id, sender_qty, cash_demand) 
@@ -417,13 +448,14 @@ app.post("/trades/propose", (req, res) => {
     });
 });
 
-app.post("/trades/resolve", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
+app.post("/trades/resolve", requireSession, (req, res) => {
     const userId = req.session.user.id;
     const { tradeId, action } = req.body;
 
+    if (!["ACCEPT", "DECLINE"].includes(action)) return res.json({ success: false });
+
     db.get("SELECT * FROM trades WHERE id = ? AND status = 'PENDING'", [tradeId], (err, trade) => {
-        if (!trade) return res.json({ success: false, message: "Transaction network connection drop." });
+        if (!trade) return res.json({ success: false, message: "Trade not found." });
 
         if (action === 'DECLINE') {
             db.run("UPDATE trades SET status = 'DECLINED' WHERE id = ?", [tradeId], () => res.json({ success: true }));
@@ -431,10 +463,10 @@ app.post("/trades/resolve", (req, res) => {
         }
 
         db.get("SELECT money FROM users WHERE id = ?", [trade.receiver_id], (err, recipient) => {
-            if (recipient.money < trade.cash_demand) return res.json({ success: false, message: "Insufficient trade funds." });
+            if (recipient.money < trade.cash_demand) return res.json({ success: false, message: "Insufficient funds." });
 
             db.get("SELECT quantity FROM user_items WHERE user_id = ? AND item_id = ? AND quantity >= ?", [trade.sender_id, trade.sender_item_id, trade.sender_qty], (err, storage) => {
-                if (!storage) return res.json({ success: false, message: "Originator cargo files no longer present." });
+                if (!storage) return res.json({ success: false, message: "Item no longer available." });
 
                 db.serialize(() => {
                     db.run("UPDATE trades SET status = 'ACCEPTED' WHERE id = ?", [tradeId]);
@@ -459,14 +491,15 @@ app.get("/chat/load", (req, res) => {
     });
 });
 
-app.post("/chat/send", (req, res) => {
-    if (!req.session.user) return res.status(401).json({ success: false });
-    const { msg } = req.body; if (!msg || !msg.trim()) return res.json({ success: false });
-    db.run("INSERT INTO chat (username, message) VALUES (?, ?)", [req.session.user.username, msg.slice(0, 140)], () => res.json({ success: true }));
+app.post("/chat/send", requireSession, (req, res) => {
+    const { msg } = req.body;
+    if (!msg || !msg.trim() || msg.length > 140) return res.json({ success: false });
+    
+    db.run("INSERT INTO chat (username, message) VALUES (?, ?)", [req.session.user.username, msg.trim()], () => res.json({ success: true }));
 });
 
 setInterval(() => {
     db.run("UPDATE users SET energy=MIN(max_energy, energy+8), nerve=MIN(max_nerve, nerve+2), hp=MIN(max_hp, hp+8), happy=MIN(max_happy, happy+15)");
 }, 60000);
 
-app.listen(PORT, () => console.log(`[ONLINE] core game loop operating live on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

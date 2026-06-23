@@ -13,10 +13,11 @@
         .form-group label { display: block; font-size: 11px; text-transform: uppercase; margin-bottom: 5px; color: #888; letter-spacing: 0.5px; }
         .form-group input { width: 100%; background: #090909; border: 1px solid #2a2a2a; color: #fff; padding: 10px; font-size: 13px; border-radius: 2px; }
         .form-group input:focus { outline: none; border-color: #ff9900; }
-        button { width: 100%; background: #222; border: 1px solid #333; color: #fff; padding: 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; cursor: pointer; border-radius: 2px; transition: all 0.2s; margin-top: 8px; }
+        button { width: 100%; background: #222; border: 1px solid #333; color: #fff; padding: 10px; font-size: 11px; font-weight: bold; text-transform: uppercase; cursor: pointer; border-radius: 2px; transition: all 0.2s; }
         button:hover { background: #ff9900; color: #000; border-color: #ff9900; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
         .status-msg { font-size: 11px; text-align: center; margin-top: 15px; min-height: 15px; font-weight: bold; }
-        .err { color: #e74c3c; } .ok { color: #2ecc71; }
+        .err { color: #e74c3c; } .ok { color: #2ecc71; } .warn { color: #f39c12; }
     </style>
 </head>
 <body>
@@ -35,32 +36,60 @@
             <input type="password" id="pass-in" placeholder="••••••••">
         </div>
 
-        <button onclick="executeAuth('/login')">Authorize Link Sequence</button>
-        <button onclick="executeAuth('/register')" style="background:#111; color:#777; border-color:#222; margin-top:5px;">Create New Network Record</button>
+        <button id="login-btn" onclick="executeAuth('/login')">Authorize Link Sequence</button>
+        <button id="register-btn" onclick="executeAuth('/register')" style="background:#111; color:#777; border-color:#222; margin-top:5px;">Create New Network Record</button>
 
         <div id="status-out" class="status-msg"></div>
     </div>
 
     <script>
+        const API_URL = window.location.origin; // Use current origin
+        
         async function executeAuth(targetRoute) {
-            const username = document.getElementById("user-in").value;
-            const password = document.getElementById("pass-in").value;
+            const username = document.getElementById("user-in").value.trim();
+            const password = document.getElementById("pass-in").value.trim();
             const status = document.getElementById("status-out");
+            const loginBtn = document.getElementById("login-btn");
+            const registerBtn = document.getElementById("register-btn");
             
-            status.className = "status-msg"; status.innerText = "Transmitting parameters...";
+            status.className = "status-msg"; 
+            status.innerText = "Transmitting parameters...";
+            loginBtn.disabled = true;
+            registerBtn.disabled = true;
 
-            if(!username.trim() || !password.trim()) {
+            if(!username || !password) {
                 status.className = "status-msg err";
-                status.innerText = "Error: Input parameters cannot be null.";
+                status.innerText = "Error: Username and password required.";
+                loginBtn.disabled = false;
+                registerBtn.disabled = false;
+                return;
+            }
+
+            if(password.length < 6) {
+                status.className = "status-msg err";
+                status.innerText = "Error: Password must be at least 6 characters.";
+                loginBtn.disabled = false;
+                registerBtn.disabled = false;
                 return;
             }
 
             try {
-                const response = await fetch(targetRoute, {
+                const response = await fetch(`${API_URL}${targetRoute}`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json", "bypass-tunnel-reminder": "true" },
-                    body: JSON.stringify({ username, password })
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "include",
+                    body: JSON.stringify({ username, password }),
+                    timeout: 10000
                 });
+
+                if(!response.ok) {
+                    status.className = "status-msg err";
+                    status.innerText = `Server error: ${response.status}`;
+                    loginBtn.disabled = false;
+                    registerBtn.disabled = false;
+                    return;
+                }
+
                 const parsedData = await response.json();
 
                 if(parsedData.success) {
@@ -72,16 +101,35 @@
                     } else {
                         status.className = "status-msg ok";
                         status.innerText = "Record creation confirmed. Proceed to authorize link.";
+                        document.getElementById("user-in").value = "";
+                        document.getElementById("pass-in").value = "";
+                        setTimeout(() => { loginBtn.disabled = false; registerBtn.disabled = false; }, 2000);
                     }
                 } else {
                     status.className = "status-msg err";
-                    status.innerText = `Rejected: ${parsedData.message || "Execution mismatch error."}`;
+                    status.innerText = `Error: ${parsedData.message || "Authentication failed"}`;
+                    loginBtn.disabled = false;
+                    registerBtn.disabled = false;
                 }
             } catch(e) {
+                console.error("Network error:", e);
                 status.className = "status-msg err";
-                status.innerText = "Network execution timeout framework crash.";
+                if(e.name === "TypeError") {
+                    status.innerText = "Connection failed. Is the server running on " + API_URL + "?";
+                } else if(e.name === "AbortError") {
+                    status.innerText = "Request timeout. Server not responding.";
+                } else {
+                    status.innerText = "Network error: " + (e.message || "Unknown error");
+                }
+                loginBtn.disabled = false;
+                registerBtn.disabled = false;
             }
         }
+
+        // Allow Enter key to submit
+        document.getElementById("pass-in").addEventListener("keypress", (e) => {
+            if(e.key === "Enter") executeAuth('/login');
+        });
     </script>
 </body>
 </html>
